@@ -11,6 +11,7 @@ const statStreakEl = document.getElementById('stat-streak');
 const statBestEl = document.getElementById('stat-best');
 const statAvgEl = document.getElementById('stat-avg');
 const yearSelect = document.getElementById('year-select');
+const syncBtn = document.getElementById('sync-btn');
 
 const creatorImg = document.getElementById('creator-img');
 const creatorName = document.getElementById('creator-name');
@@ -33,6 +34,7 @@ const state = {
   view: 'year', // 'year' | 'month' | 'week'
   year: new Date().getFullYear(),
   backgroundLoopRunning: false,
+  lastUpsertHash: null,
 };
 
 // Utility: format YYYY-MM-DD
@@ -316,8 +318,16 @@ function attachTooltipHandlers(cell, count, date) {
 
 function positionTooltip(anchorEl) {
   const rect = anchorEl.getBoundingClientRect();
-  const x = rect.left + rect.width / 2;
-  const y = rect.top;
+  let x = rect.left + rect.width / 2;
+  let y = rect.top;
+
+  // Keep tooltip within viewport on mobile
+  const padding = 12;
+  const vw = window.innerWidth;
+  const tooltipWidth = 220; // max-width
+  if (x - tooltipWidth / 2 < padding) x = padding + tooltipWidth / 2;
+  if (x + tooltipWidth / 2 > vw - padding) x = vw - padding - tooltipWidth / 2;
+
   tooltipEl.style.left = `${x}px`;
   tooltipEl.style.top = `${y}px`;
 }
@@ -369,18 +379,22 @@ function populateYearSelect() {
 }
 
 /*
-  NEW: Prompt history based on revision creation times
+  Prompt history based on revision creation times
   We count one "prompt" for each ProjectRevision created by the creator.
   This uses /users/{user}/projects to enumerate projects,
   then /projects/{id}/revisions (paginated) to aggregate revision.created_at.
 */
+
+const isMobile = () => window.matchMedia('(max-width: 560px)').matches;
 
 async function fetchProjectRevisions(projectId, creatorId, opts = {}) {
   let after = null;
   let hasNext = true;
   let localCount = 0;
   let pages = 0;
-  const MAX_REV_PAGES = opts.maxRevisionPages ?? 50;
+
+  // Lighter load on mobile
+  const MAX_REV_PAGES = opts.maxRevisionPages ?? (isMobile() ? 15 : 50);
 
   while (hasNext) {
     pages++;
@@ -438,8 +452,10 @@ async function fetchPromptHistoryByCreator(username, creatorId) {
   let hasNext = true;
   let projPages = 0;
   let processedProjects = 0;
-  const MAX_PROJECT_PAGES = 50;     // safety cap: 50 pages * 50 = 2500 projects
-  const MAX_PROJECTS_TOTAL = 1000;  // additional cap on total projects processed
+
+  // Lighter pagination caps on mobile
+  const MAX_PROJECT_PAGES = isMobile() ? 20 : 50;     // pages
+  const MAX_PROJECTS_TOTAL = isMobile() ? 400 : 1000; // total projects
 
   statusEl.textContent = 'Loading prompt history (by revision dates)…';
 
@@ -511,17 +527,25 @@ async function fetchPromptHistoryByCreator(username, creatorId) {
 }
 
 // Background: persist creator stats to leaderboard collection keyed by user_id
+function makeStatsHash({ total, currentStreak, bestStreak, avg }) {
+  return `${total}|${currentStreak}|${bestStreak}|${avg.toFixed(4)}`;
+}
+
 async function upsertLeaderboardForCreator(creatorId) {
   const { total, currentStreak, bestStreak, avg } = computeStats();
+  const hash = makeStatsHash({ total, currentStreak, bestStreak, avg });
+  if (hash === state.lastUpsertHash) return; // no change, skip write
+
   try {
     await room.collection('prompt_leaderboard_v1').upsert({
-      id: creatorId,            // primary key = user_id (stored as text in schema)
+      id: String(creatorId),   // primary key = user_id stored as text
       total_prompts: total,
       current_streak: currentStreak,
       best_streak: bestStreak,
       avg_per_day: Number(avg.toFixed(4)),
       updated_at: new Date().toISOString(),
     });
+    state.lastUpsertHash = hash;
   } catch (e) {
     console.warn('Leaderboard upsert failed', e);
   }
@@ -587,6 +611,24 @@ function setupControls() {
     refreshView();
     incrementalPaint();
   });
+
+  syncBtn.addEventListener('click', async () => {
+    if (!state.creator?.username || !state.creator?.id) return;
+    syncBtn.disabled = true;
+    syncBtn.classList.add('spinning');
+    statusEl.textContent = 'Syncing…';
+    try {
+      await fetchPromptHistoryByCreator(state.creator.username, state.creator.id);
+      await upsertLeaderboardForCreator(state.creator.id);
+      statusEl.textContent = 'Synced.';
+    } catch (e) {
+      console.warn('Manual sync failed', e);
+      statusEl.textContent = 'Sync failed.';
+    } finally {
+      syncBtn.disabled = false;
+      syncBtn.classList.remove('spinning');
+    }
+  });
 }
 
 // Background loop: periodically refresh creator data and upsert leaderboard
@@ -597,18 +639,23 @@ async function backgroundAggregatorLoop() {
   // gentle stagger so UI stabilizes before background work
   await new Promise(r => setTimeout(r, 1000));
 
-  while (true) {
+  const loop = async () => {
+    // Backoff more on mobile
+    const intervalMs = isMobile() ? 5 * 60 * 1000 : 2 * 60 * 1000;
+
     try {
-      // Recompute from source using revision creation dates
-      await fetchPromptHistoryByCreator(state.creator.username, state.creator.id);
-      await upsertLeaderboardForCreator(state.creator.id);
+      if (document.visibilityState === 'visible') {
+        await fetchPromptHistoryByCreator(state.creator.username, state.creator.id);
+        await upsertLeaderboardForCreator(state.creator.id);
+      }
     } catch (e) {
       console.warn('Background aggregation pass failed', e);
+    } finally {
+      setTimeout(loop, intervalMs);
     }
+  };
 
-    // sleep between passes; keep it light
-    await new Promise(r => setTimeout(r, 2 * 60 * 1000)); // 2 minutes
-  }
+  loop();
 }
 
 async function init() {
@@ -642,6 +689,13 @@ async function init() {
 
   // Start background loop to keep leaderboard fresh "infinitely"
   backgroundAggregatorLoop();
+
+  // Rerender heatmap responsively when viewport crosses mobile threshold
+  const mq = window.matchMedia('(max-width: 560px)');
+  mq.addEventListener?.('change', () => {
+    refreshView();
+    incrementalPaint();
+  });
 }
 
 init();
