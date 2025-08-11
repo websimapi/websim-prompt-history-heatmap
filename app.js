@@ -45,6 +45,9 @@ function dateKeyLocal(d) {
   return `${y}-${m}-${day}`;
 }
 
+// Alias toKey to our date key formatter (fixes ReferenceError)
+const toKey = dateKeyLocal;
+
 // Utility: parse any ISO timestamp into a Date at LOCAL midnight
 function toLocalMidnight(iso) {
   const d = new Date(iso);
