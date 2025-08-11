@@ -372,16 +372,38 @@ body {
   .creator-name { font-size: 14px; }
   .creator-sub { font-size: 11px; }
   .year-select-wrap select { padding: 8px; }
+
+  /* Hide less critical controls to save space */
+  .year-select-wrap { display: none; }
+  .legend { display: none; }
+
+  /* Make panels tighter */
+  .heatmap-card { padding: 10px; }
+  .stats { padding: 10px; gap: 8px; }
+
+  /* Heatmap denser */
+  .heatmap { grid-auto-columns: 9px; gap: 2px; }
+  .hm-week { grid-template-rows: repeat(7, 9px); gap: 2px; }
+  .hm-day { width: 9px; height: 9px; border-radius: 2px; }
+  .hm-month-labels { grid-auto-columns: 9px; gap: 2px; font-size: 9px; height: 14px; }
+
+  /* Sidebar items more compact */
+  .lb-item { grid-template-columns: 22px 1fr auto; gap: 6px; }
+  .lb-rank { width: 22px; height: 22px; font-size: 11px; }
+  .lb-user { grid-template-columns: 20px 1fr; gap: 6px; }
+  .lb-user img { width: 20px; height: 20px; }
+  .lb-metric { font-size: 11px; }
+  .stat-value { font-size: 18px; }
+  .stat-label { font-size: 11px; }
+  .footer { font-size: 11px; }
   .sync-text { display: none; } /* icon-only on very small screens */
 }
 
 @media (max-width: 420px) {
   .y-axis { display: none; } /* save horizontal space on phones */
   .heatmap-wrap { grid-template-columns: 1fr; }
-  .heatmap { grid-auto-columns: 9px; gap: 2px; }
-  .hm-week { grid-template-rows: repeat(7, 9px); gap: 2px; }
-  .hm-day { width: 9px; height: 9px; }
-  .hm-month-labels { grid-auto-columns: 9px; gap: 2px; font-size: 9px; }
-  .legend { gap: 6px; }
-  .legend-steps { gap: 3px; }
+  .heatmap { grid-auto-columns: 8px; gap: 2px; }
+  .hm-week { grid-template-rows: repeat(7, 8px); gap: 2px; }
+  .hm-day { width: 8px; height: 8px; }
+  .hm-month-labels { grid-auto-columns: 8px; gap: 2px; font-size: 8px; height: 12px; }
 }

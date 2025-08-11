@@ -38,10 +38,15 @@ const state = {
 };
 
 // Utility: format YYYY-MM-DD
-const toKey = (d) => d.toISOString().slice(0, 10);
+function dateKeyLocal(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
 
-// Utility: parse date string (ISO) into Date at local midnight for grid by weekday
-function toUTCDate(iso) {
+// Utility: parse any ISO timestamp into a Date at LOCAL midnight
+function toLocalMidnight(iso) {
   const d = new Date(iso);
   return new Date(d.getFullYear(), d.getMonth(), d.getDate());
 }
@@ -354,7 +359,8 @@ function incrementalPaint() {
   for (const cell of cells) {
     const k = cell.dataset.date;
     if (!k) continue;
-    const d = new Date(k);
+    const parts = k.split('-');
+    const d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
     const count = state.countsByDay.get(k) || 0;
     const lvl = levelForCount(count);
     cell.dataset.level = lvl;
@@ -421,12 +427,9 @@ async function fetchProjectRevisions(projectId, creatorId, opts = {}) {
       const rev = row.project_revision;
       if (!rev) continue;
 
-      // Count only revisions authored by the creator
-      if (rev.created_by?.id !== creatorId) continue;
-
-      // Use revision.created_at as the "prompt date"
+      // Count all revisions on the creator's projects
       if (!rev.created_at) continue;
-      const d = toUTCDate(rev.created_at);
+      const d = toLocalMidnight(rev.created_at);
       const k = toKey(d);
       state.countsByDay.set(k, (state.countsByDay.get(k) || 0) + 1);
       localCount++;
@@ -454,8 +457,8 @@ async function fetchPromptHistoryByCreator(username, creatorId) {
   let processedProjects = 0;
 
   // Lighter pagination caps on mobile
-  const MAX_PROJECT_PAGES = isMobile() ? 20 : 50;     // pages
-  const MAX_PROJECTS_TOTAL = isMobile() ? 400 : 1000; // total projects
+  const MAX_PROJECT_PAGES = isMobile() ? 12 : 40;     // pages
+  const MAX_PROJECTS_TOTAL = isMobile() ? 250 : 800;  // total projects
 
   statusEl.textContent = 'Loading prompt history (by revision dates)…';
 
@@ -470,6 +473,8 @@ async function fetchPromptHistoryByCreator(username, creatorId) {
     projPages++;
     const params = new URLSearchParams();
     params.set('first', '50');
+    // Prefer posted projects for a truer "prompt" proxy and smaller result sets
+    params.set('posted', 'true');
     if (after) params.set('after', after);
     const url = `/api/v1/users/${encodeURIComponent(username)}/projects?` + params.toString();
 
@@ -504,7 +509,7 @@ async function fetchPromptHistoryByCreator(username, creatorId) {
       processedProjects++;
       statusEl.textContent = `Loading prompt history… (${processedProjects} projects, page ${projPages})`;
 
-      // Count revisions for this project (authored by creator)
+      // Count revisions for this project
       await fetchProjectRevisions(project.id, creatorId);
 
       // Light pause to avoid hammering the API
@@ -668,7 +673,6 @@ async function init() {
     creator = await window.websim.getCreator?.();
   } catch {}
   if (!creator) {
-    // Fallback to current user as the "creator" if getCreator is unavailable
     try { creator = await window.websim.getUser?.(); } catch {}
   }
   if (!creator || !creator.username) {
@@ -679,11 +683,16 @@ async function init() {
   state.creator = creator;
   updateCreatorUI(creator);
 
-  // Initial render scaffold for the current year so UI isn't empty
+  // Choose a more compact default on small screens
   state.year = new Date().getFullYear();
+  if (isMobile()) {
+    state.view = 'month';
+  }
+
+  // Initial render scaffold
   refreshView();
 
-  // Stream in data once immediately for UI (based on ProjectRevision created_at)
+  // Stream in data once immediately for UI
   await fetchPromptHistoryByCreator(creator.username, creator.id);
   await upsertLeaderboardForCreator(creator.id);
 
@@ -693,6 +702,9 @@ async function init() {
   // Rerender heatmap responsively when viewport crosses mobile threshold
   const mq = window.matchMedia('(max-width: 560px)');
   mq.addEventListener?.('change', () => {
+    if (isMobile() && state.view === 'year') {
+      state.view = 'month';
+    }
     refreshView();
     incrementalPaint();
   });
