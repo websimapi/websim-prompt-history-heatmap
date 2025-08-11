@@ -1,0 +1,34 @@
+{
+  "database": {
+    "schema": {
+      "prompt_leaderboard_v1": {
+        "id": {
+          "type": "text",
+          "description": "Primary key = user_id"
+        },
+        "total_prompts": {
+          "type": "integer",
+          "description": "Total posted prompts observed across fetched history"
+        },
+        "current_streak": {
+          "type": "integer",
+          "description": "Current daily prompt streak (days)"
+        },
+        "best_streak": {
+          "type": "integer",
+          "description": "Longest daily prompt streak (days)"
+        },
+        "avg_per_day": {
+          "type": "numeric",
+          "description": "Average prompts per day across observed span"
+        },
+        "updated_at": {
+          "type": "timestamptz",
+          "description": "Last aggregation time"
+        }
+      }
+    },
+    "instructions": "prompt_leaderboard_v1 stores aggregated prompting stats keyed by user_id. Join against public.user to resolve usernames and avatars for display. Example: select pl.*, u.username from public.prompt_leaderboard_v1 pl join public.user u on (u.id = pl.id) order by pl.total_prompts desc"
+  }
+}
+

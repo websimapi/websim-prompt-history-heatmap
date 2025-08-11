@@ -1,6 +1,6 @@
-// Prompt History Heatmap
-// Aggregates creator's posted generations by site.created_at to estimate "prompts per day".
-// Loads asynchronously in pages and updates the heatmap as results stream in.
+// Prompt History Heatmap + Background Leaderboard Aggregator
+
+import { WebsimSocket } from '@websim/websim-socket';
 
 const heatmapEl = document.getElementById('heatmap');
 const tooltipEl = document.getElementById('tooltip');
@@ -17,6 +17,11 @@ const creatorName = document.getElementById('creator-name');
 const creatorAvatarLink = document.getElementById('creator-avatar');
 const creatorSub = document.getElementById('creator-sub');
 
+const leaderboardEl = document.getElementById('leaderboard');
+
+// DB socket (vanilla)
+const room = new WebsimSocket();
+
 // State
 const state = {
   creator: null,
@@ -27,15 +32,15 @@ const state = {
   totalCount: 0,
   view: 'year', // 'year' | 'month' | 'week'
   year: new Date().getFullYear(),
+  backgroundLoopRunning: false,
 };
 
 // Utility: format YYYY-MM-DD
 const toKey = (d) => d.toISOString().slice(0, 10);
 
-// Utility: parse date string (ISO) into Date at UTC midnight
+// Utility: parse date string (ISO) into Date at local midnight for grid by weekday
 function toUTCDate(iso) {
   const d = new Date(iso);
-  // normalize to midnight local for rendering grid by weekday
   return new Date(d.getFullYear(), d.getMonth(), d.getDate());
 }
 
@@ -100,11 +105,10 @@ function updateCreatorUI(user) {
   creatorAvatarLink.href = profileUrl;
   creatorImg.src = user.avatar_url || `https://images.websim.com/avatar/${user.username}`;
   creatorImg.alt = `${user.username} avatar`;
-
   creatorSub.textContent = `Prompt activity overview`;
 }
 
-function updateStats() {
+function computeStats() {
   // total prompts
   let total = 0;
   let minDate = null;
@@ -119,18 +123,13 @@ function updateStats() {
   state.minDate = minDate;
   state.maxDate = maxDate;
 
-  statTotalEl.textContent = fmtNum(total);
-
   // streaks
   const sortedKeys = Array.from(state.countsByDay.keys()).sort();
-  // build a set for fast membership
   const active = new Set(sortedKeys.filter(k => state.countsByDay.get(k) > 0));
 
   const today = new Date();
-  const todayKey = toKey(today);
   let currentStreak = 0;
   let cursor = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-  // count backwards until a zero-count day or no data. We treat missing days as zero.
   while (true) {
     const key = toKey(cursor);
     if (active.has(key)) currentStreak++;
@@ -140,7 +139,6 @@ function updateStats() {
 
   // best streak
   let bestStreak = 0;
-  // iterate full range between minDate and maxDate (or 1 year if missing)
   const rangeStart = state.minDate ? new Date(state.minDate) : addDays(today, -365);
   const rangeEnd = state.maxDate ? new Date(state.maxDate) : today;
   let s = 0;
@@ -154,10 +152,21 @@ function updateStats() {
     }
   }
 
-  // average per day over visible year (or over full observed span)
-  let daySpan = Math.max(1, dayDiff(rangeStart, rangeEnd) + 1);
+  // average per day over observed span
+  const daySpan = Math.max(1, dayDiff(rangeStart, rangeEnd) + 1);
   const avg = total / daySpan;
 
+  return {
+    total,
+    currentStreak,
+    bestStreak,
+    avg,
+  };
+}
+
+function updateStatsUI() {
+  const { total, currentStreak, bestStreak, avg } = computeStats();
+  statTotalEl.textContent = fmtNum(total);
   statStreakEl.textContent = `${currentStreak} days`;
   statBestEl.textContent = `${bestStreak} days`;
   statAvgEl.textContent = avg < 10 ? avg.toFixed(2) : fmtNum(Math.round(avg));
@@ -285,21 +294,21 @@ function buildWeekHeatmap(refDate) {
 }
 
 function attachTooltipHandlers(cell, count, date) {
-  cell.addEventListener('mouseenter', () => {
+  function setContent() {
     tooltipEl.innerHTML = `
       <div><strong>${count}</strong> prompt${count === 1 ? '' : 's'}</div>
       <div class="muted">${date.toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}</div>
     `;
+  }
+  cell.addEventListener('mouseenter', () => {
+    setContent();
     tooltipEl.hidden = false;
     positionTooltip(cell);
   });
   cell.addEventListener('mousemove', () => positionTooltip(cell));
   cell.addEventListener('mouseleave', () => { tooltipEl.hidden = true; });
   cell.addEventListener('focus', () => {
-    tooltipEl.innerHTML = `
-      <div><strong>${count}</strong> prompt${count === 1 ? '' : 's'}</div>
-      <div class="muted">${date.toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}</div>
-    `;
+    setContent();
     tooltipEl.hidden = false;
     positionTooltip(cell);
   });
@@ -344,7 +353,7 @@ function incrementalPaint() {
     cell.dataset.level = lvl;
     cell.title = `${count} prompt${count === 1 ? '' : 's'} on ${d.toLocaleDateString()}`;
   }
-  updateStats();
+  updateStatsUI();
 }
 
 function populateYearSelect() {
@@ -369,6 +378,13 @@ async function fetchAllProjectsByCreator(username) {
   let page = 0;
 
   statusEl.textContent = 'Loading prompt activity…';
+
+  // clear previous
+  state.countsByDay.clear();
+  state.minDate = null;
+  state.maxDate = null;
+  state.fetchedPages = 0;
+  state.totalCount = 0;
 
   while (hasNext) {
     page++;
@@ -411,7 +427,7 @@ async function fetchAllProjectsByCreator(username) {
     }
 
     // Update stats and repaint incrementally as data streams in
-    updateStats();
+    updateStatsUI();
     incrementalPaint();
 
     // Yield to UI between pages
@@ -429,6 +445,65 @@ async function fetchAllProjectsByCreator(username) {
   refreshView(); // final layout pass (ensures month labels etc.)
 }
 
+// Background: persist creator stats to leaderboard collection keyed by user_id
+async function upsertLeaderboardForCreator(creatorId) {
+  const { total, currentStreak, bestStreak, avg } = computeStats();
+  try {
+    await room.collection('prompt_leaderboard_v1').upsert({
+      id: creatorId,            // primary key = user_id
+      total_prompts: total,
+      current_streak: currentStreak,
+      best_streak: bestStreak,
+      avg_per_day: Number(avg.toFixed(4)),
+      updated_at: new Date().toISOString(),
+    });
+  } catch (e) {
+    console.warn('Leaderboard upsert failed', e);
+  }
+}
+
+// Subscribe to leaderboard and render
+let unsubscribeLeaderboard = null;
+function startLeaderboardSubscription() {
+  const sql = `
+    select
+      pl.id,
+      pl.total_prompts,
+      pl.current_streak,
+      pl.best_streak,
+      pl.avg_per_day,
+      u.username
+    from public.prompt_leaderboard_v1 pl
+    join public.user u on (u.id = pl.id)
+    order by pl.total_prompts desc, pl.best_streak desc, pl.current_streak desc
+    limit 20
+  `;
+  try {
+    if (unsubscribeLeaderboard) unsubscribeLeaderboard();
+  } catch {}
+  unsubscribeLeaderboard = room.query(sql).subscribe((rows) => {
+    renderLeaderboard(rows || []);
+  });
+}
+
+function renderLeaderboard(rows) {
+  leaderboardEl.innerHTML = '';
+  rows.forEach((r, idx) => {
+    const li = document.createElement('li');
+    li.className = 'lb-item';
+    li.innerHTML = `
+      <div class="lb-rank">${idx + 1}</div>
+      <div class="lb-user">
+        <img src="https://images.websim.com/avatar/${r.username}" alt="${r.username} avatar" />
+        <a href="https://websim.com/@${r.username}" target="_blank" rel="noopener">@${r.username}</a>
+      </div>
+      <div class="lb-metric"><span class="lb-total">${fmtNum(r.total_prompts || 0)}</span> total</div>
+    `;
+    leaderboardEl.appendChild(li);
+  });
+}
+
+// Controls
 function setupControls() {
   document.querySelectorAll('.toggle-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -449,8 +524,31 @@ function setupControls() {
   });
 }
 
+// Background loop: periodically refresh creator data and upsert leaderboard
+async function backgroundAggregatorLoop() {
+  if (state.backgroundLoopRunning || !state.creator?.username || !state.creator?.id) return;
+  state.backgroundLoopRunning = true;
+
+  // gentle stagger so UI stabilizes before background work
+  await new Promise(r => setTimeout(r, 1000));
+
+  while (true) {
+    try {
+      // Recompute from source to keep totals honest (bounded by safety cap in fetch)
+      await fetchAllProjectsByCreator(state.creator.username);
+      await upsertLeaderboardForCreator(state.creator.id);
+    } catch (e) {
+      console.warn('Background aggregation pass failed', e);
+    }
+
+    // sleep between passes; keep it light
+    await new Promise(r => setTimeout(r, 2 * 60 * 1000)); // 2 minutes
+  }
+}
+
 async function init() {
   setupControls();
+  startLeaderboardSubscription();
 
   // Identify the creator of the current page if available
   let creator = null;
@@ -473,9 +571,12 @@ async function init() {
   state.year = new Date().getFullYear();
   refreshView();
 
-  // Stream in data
-  fetchAllProjectsByCreator(creator.username);
+  // Stream in data once immediately for UI
+  await fetchAllProjectsByCreator(creator.username);
+  await upsertLeaderboardForCreator(creator.id);
+
+  // Start background loop to keep leaderboard fresh "infinitely"
+  backgroundAggregatorLoop();
 }
 
 init();
-

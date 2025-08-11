@@ -9,7 +9,8 @@
     <script type="importmap">
       {
         "imports": {
-          "htm": "https://unpkg.com/htm@3.1.1/dist/htm.module.js"
+          "htm": "https://unpkg.com/htm@3.1.1/dist/htm.module.js",
+          "@websim/websim-socket": "https://esm.websim.com/@websim/websim-socket"
         }
       }
     </script>
@@ -46,7 +47,7 @@
         <div class="heatmap-header">
           <div class="heatmap-title">Prompts per day</div>
           <div class="legend" aria-label="Color intensity legend">
-            <span>Less</span>
+            <span class="legend-text">Less</span>
             <div class="legend-steps">
               <div class="legend-swatch lvl-0" title="0"></div>
               <div class="legend-swatch lvl-1" title="1"></div>
@@ -54,7 +55,7 @@
               <div class="legend-swatch lvl-3" title="4-6"></div>
               <div class="legend-swatch lvl-4" title="7+"></div>
             </div>
-            <span>More</span>
+            <span class="legend-text">More</span>
           </div>
         </div>
 
@@ -90,11 +91,19 @@
           <div class="stat-value" id="stat-avg">—</div>
           <div class="stat-label">Avg per day</div>
         </div>
+
+        <div class="divider"></div>
+
+        <div class="leaderboard-header">
+          <div class="lb-title">Leaderboard</div>
+          <div class="lb-sub muted">Top creators by total prompts</div>
+        </div>
+        <ol id="leaderboard" class="leaderboard" aria-label="Prompt leaderboard"></ol>
       </aside>
     </main>
 
     <footer class="footer">
-      Data aggregates the creator’s posted generations (sites/projects) by created date to estimate “prompts per day.”
+      Data aggregates the creator’s posted generations (sites/projects) by created date to estimate “prompts per day.” Leaderboard updates continuously in the background.
     </footer>
 
     <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
@@ -103,4 +112,3 @@
   <script defer src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon='{"version":"2024.11.0","token":"4c6229722a6346bc8eb5cb0e5eae5d41","server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
 </body>
 </html>
-
