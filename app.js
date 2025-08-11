@@ -219,7 +219,6 @@ function buildYearHeatmap(year) {
   }
 
   // month labels
-  // Insert short label at their first week column
   for (const [month, col] of monthPositions.entries()) {
     const span = document.createElement('div');
     span.className = 'label';
@@ -331,7 +330,6 @@ function refreshView() {
   if (state.view === 'year') {
     buildYearHeatmap(state.year);
   } else if (state.view === 'month') {
-    // for month view, use selected year + the latest month with data or current month
     const d = new Date();
     d.setFullYear(state.year);
     buildMonthHeatmap(d);
@@ -342,7 +340,6 @@ function refreshView() {
 
 // As new data arrives, update cells for currently-rendered period
 function incrementalPaint() {
-  // Update only title/tooltips and data-levels in the currently visible grid
   const cells = heatmapEl.querySelectorAll('.hm-day');
   for (const cell of cells) {
     const k = cell.dataset.date;
@@ -371,15 +368,82 @@ function populateYearSelect() {
   }
 }
 
-// Fetch all projects by creator; stream pages and aggregate counts
-async function fetchAllProjectsByCreator(username) {
+/*
+  NEW: Prompt history based on revision creation times
+  We count one "prompt" for each ProjectRevision created by the creator.
+  This uses /users/{user}/projects to enumerate projects,
+  then /projects/{id}/revisions (paginated) to aggregate revision.created_at.
+*/
+
+async function fetchProjectRevisions(projectId, creatorId, opts = {}) {
   let after = null;
   let hasNext = true;
-  let page = 0;
+  let localCount = 0;
+  let pages = 0;
+  const MAX_REV_PAGES = opts.maxRevisionPages ?? 50;
 
-  statusEl.textContent = 'Loading prompt activity…';
+  while (hasNext) {
+    pages++;
+    const params = new URLSearchParams();
+    params.set('first', '100');
+    if (after) params.set('after', after);
+    const url = `/api/v1/projects/${encodeURIComponent(projectId)}/revisions?` + params.toString();
 
-  // clear previous
+    let body;
+    try {
+      const res = await fetch(url);
+      body = await res.json();
+    } catch (e) {
+      console.warn('Failed to fetch revisions for project', projectId, e);
+      break;
+    }
+
+    const pageData = body?.revisions?.data ?? [];
+    const meta = body?.revisions?.meta ?? null;
+    after = meta?.end_cursor ?? null;
+    hasNext = Boolean(meta?.has_next_page);
+
+    for (const row of pageData) {
+      const rev = row.project_revision;
+      if (!rev) continue;
+
+      // Count only revisions authored by the creator
+      if (rev.created_by?.id !== creatorId) continue;
+
+      // Use revision.created_at as the "prompt date"
+      if (!rev.created_at) continue;
+      const d = toUTCDate(rev.created_at);
+      const k = toKey(d);
+      state.countsByDay.set(k, (state.countsByDay.get(k) || 0) + 1);
+      localCount++;
+    }
+
+    // repaint incrementally
+    incrementalPaint();
+
+    if (pages >= MAX_REV_PAGES) {
+      hasNext = false;
+    }
+
+    // yield
+    await new Promise(r => setTimeout(r, 0));
+  }
+
+  return localCount;
+}
+
+// Fetch prompt history for creator by traversing projects and their revisions
+async function fetchPromptHistoryByCreator(username, creatorId) {
+  let after = null;
+  let hasNext = true;
+  let projPages = 0;
+  let processedProjects = 0;
+  const MAX_PROJECT_PAGES = 50;     // safety cap: 50 pages * 50 = 2500 projects
+  const MAX_PROJECTS_TOTAL = 1000;  // additional cap on total projects processed
+
+  statusEl.textContent = 'Loading prompt history (by revision dates)…';
+
+  // reset aggregates
   state.countsByDay.clear();
   state.minDate = null;
   state.maxDate = null;
@@ -387,12 +451,10 @@ async function fetchAllProjectsByCreator(username) {
   state.totalCount = 0;
 
   while (hasNext) {
-    page++;
+    projPages++;
     const params = new URLSearchParams();
     params.set('first', '50');
     if (after) params.set('after', after);
-    // Only include projects that have a posted revision
-    // The endpoint doesn't directly filter posted=true, so filter client-side.
     const url = `/api/v1/users/${encodeURIComponent(username)}/projects?` + params.toString();
 
     let body;
@@ -400,13 +462,13 @@ async function fetchAllProjectsByCreator(username) {
       const res = await fetch(url);
       body = await res.json();
     } catch (e) {
-      statusEl.textContent = 'Failed to load activity.';
+      statusEl.textContent = 'Failed to load prompt history.';
       console.error(e);
       break;
     }
 
-    state.fetchedPages = page;
-    pageCountEl.textContent = `(page ${page})`;
+    state.fetchedPages = projPages;
+    pageCountEl.textContent = `(projects page ${projPages})`;
 
     const pageData = body?.projects?.data ?? [];
     const meta = body?.projects?.meta ?? null;
@@ -414,33 +476,36 @@ async function fetchAllProjectsByCreator(username) {
     hasNext = Boolean(meta?.has_next_page);
     after = nextCursor;
 
-    // Aggregate counts by site.created_at (posted generations)
+    // Process each project: fetch revisions and count prompts
     for (const row of pageData) {
+      if (processedProjects >= MAX_PROJECTS_TOTAL) {
+        hasNext = false;
+        break;
+      }
       const project = row.project;
-      const site = row.site;
-      // Count only posted content (published/posted flag)
-      if (!project?.posted) continue;
-      if (!site?.created_at) continue;
-      const d = toUTCDate(site.created_at);
-      const k = toKey(d);
-      state.countsByDay.set(k, (state.countsByDay.get(k) || 0) + 1);
+      if (!project?.id) continue;
+
+      processedProjects++;
+      statusEl.textContent = `Loading prompt history… (${processedProjects} projects, page ${projPages})`;
+
+      // Count revisions for this project (authored by creator)
+      await fetchProjectRevisions(project.id, creatorId);
+
+      // Light pause to avoid hammering the API
+      await new Promise(r => setTimeout(r, 0));
     }
 
-    // Update stats and repaint incrementally as data streams in
-    updateStatsUI();
-    incrementalPaint();
-
-    // Yield to UI between pages
-    await new Promise(r => setTimeout(r, 0));
-
-    // Safety: avoid too many pages in case of gigantic history (cap to, say, 50 pages = 2500 projects)
-    if (page >= 50) {
+    if (projPages >= MAX_PROJECT_PAGES) {
       hasNext = false;
     }
+
+    // repaint stats as we go
+    updateStatsUI();
+    incrementalPaint();
   }
 
   statusEl.textContent = 'Loaded.';
-  pageCountEl.textContent = state.fetchedPages ? `(pages: ${state.fetchedPages})` : '';
+  pageCountEl.textContent = state.fetchedPages ? `(projects pages: ${state.fetchedPages})` : '';
   populateYearSelect();
   refreshView(); // final layout pass (ensures month labels etc.)
 }
@@ -534,8 +599,8 @@ async function backgroundAggregatorLoop() {
 
   while (true) {
     try {
-      // Recompute from source to keep totals honest (bounded by safety cap in fetch)
-      await fetchAllProjectsByCreator(state.creator.username);
+      // Recompute from source using revision creation dates
+      await fetchPromptHistoryByCreator(state.creator.username, state.creator.id);
       await upsertLeaderboardForCreator(state.creator.id);
     } catch (e) {
       console.warn('Background aggregation pass failed', e);
@@ -571,8 +636,8 @@ async function init() {
   state.year = new Date().getFullYear();
   refreshView();
 
-  // Stream in data once immediately for UI
-  await fetchAllProjectsByCreator(creator.username);
+  // Stream in data once immediately for UI (based on ProjectRevision created_at)
+  await fetchPromptHistoryByCreator(creator.username, creator.id);
   await upsertLeaderboardForCreator(creator.id);
 
   // Start background loop to keep leaderboard fresh "infinitely"
