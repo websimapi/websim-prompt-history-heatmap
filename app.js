@@ -1,4 +1,4 @@
-// Prompt History Heatmap + Background Leaderboard Aggregator
+// Prompt History Heatmap + Background Database Aggregator (leaderboard UI removed)
 
 import { WebsimSocket } from '@websim/websim-socket';
 
@@ -17,8 +17,6 @@ const creatorImg = document.getElementById('creator-img');
 const creatorName = document.getElementById('creator-name');
 const creatorAvatarLink = document.getElementById('creator-avatar');
 const creatorSub = document.getElementById('creator-sub');
-
-const leaderboardEl = document.getElementById('leaderboard');
 
 // DB socket (vanilla)
 const room = new WebsimSocket();
@@ -97,15 +95,6 @@ function startOfYear(year) {
 
 function endOfYear(year) {
   return new Date(year, 11, 31);
-}
-
-function monthLabelsForYear(year) {
-  const labels = [];
-  for (let m = 0; m < 12; m++) {
-    const d = new Date(year, m, 1);
-    labels.push(d.toLocaleString(undefined, { month: 'short' }));
-  }
-  return labels;
 }
 
 function updateCreatorUI(user) {
@@ -399,7 +388,6 @@ const isMobile = () => window.matchMedia('(max-width: 560px)').matches;
 async function fetchProjectRevisions(projectId, creatorId, opts = {}) {
   let after = null;
   let hasNext = true;
-  let localCount = 0;
   let pages = 0;
 
   // Lighter load on mobile
@@ -428,14 +416,12 @@ async function fetchProjectRevisions(projectId, creatorId, opts = {}) {
 
     for (const row of pageData) {
       const rev = row.project_revision;
-      if (!rev) continue;
+      if (!rev || !rev.created_at) continue;
 
-      // Count all revisions on the creator's projects
-      if (!rev.created_at) continue;
+      // Count all revisions on the creator's projects as prompts (prompt date = revision created_at local date)
       const d = toLocalMidnight(rev.created_at);
       const k = toKey(d);
       state.countsByDay.set(k, (state.countsByDay.get(k) || 0) + 1);
-      localCount++;
     }
 
     // repaint incrementally
@@ -448,8 +434,6 @@ async function fetchProjectRevisions(projectId, creatorId, opts = {}) {
     // yield
     await new Promise(r => setTimeout(r, 0));
   }
-
-  return localCount;
 }
 
 // Fetch prompt history for creator by traversing projects and their revisions
@@ -534,7 +518,7 @@ async function fetchPromptHistoryByCreator(username, creatorId) {
   refreshView(); // final layout pass (ensures month labels etc.)
 }
 
-// Background: persist creator stats to leaderboard collection keyed by user_id
+// Background: persist creator stats to database collection keyed by user_id
 function makeStatsHash({ total, currentStreak, bestStreak, avg }) {
   return `${total}|${currentStreak}|${bestStreak}|${avg.toFixed(4)}`;
 }
@@ -547,7 +531,7 @@ async function upsertLeaderboardForCreator(creatorId) {
   try {
     await room.collection('prompt_leaderboard_v1').upsert({
       id: String(creatorId),   // primary key = user_id stored as text
-      total_prompts: total,
+      total_prompts: state.totalCount || total,
       current_streak: currentStreak,
       best_streak: bestStreak,
       avg_per_day: Number(avg.toFixed(4)),
@@ -555,49 +539,8 @@ async function upsertLeaderboardForCreator(creatorId) {
     });
     state.lastUpsertHash = hash;
   } catch (e) {
-    console.warn('Leaderboard upsert failed', e);
+    console.warn('DB upsert failed', e);
   }
-}
-
-// Subscribe to leaderboard and render
-let unsubscribeLeaderboard = null;
-function startLeaderboardSubscription() {
-  const sql = `
-    select
-      pl.id,
-      pl.total_prompts,
-      pl.current_streak,
-      pl.best_streak,
-      pl.avg_per_day,
-      u.username
-    from public.prompt_leaderboard_v1 pl
-    join public.user u on (u.id::text = pl.id)
-    order by pl.total_prompts desc, pl.best_streak desc, pl.current_streak desc
-    limit 20
-  `;
-  try {
-    if (unsubscribeLeaderboard) unsubscribeLeaderboard();
-  } catch {}
-  unsubscribeLeaderboard = room.query(sql).subscribe((rows) => {
-    renderLeaderboard(rows || []);
-  });
-}
-
-function renderLeaderboard(rows) {
-  leaderboardEl.innerHTML = '';
-  rows.forEach((r, idx) => {
-    const li = document.createElement('li');
-    li.className = 'lb-item';
-    li.innerHTML = `
-      <div class="lb-rank">${idx + 1}</div>
-      <div class="lb-user">
-        <img src="https://images.websim.com/avatar/${r.username}" alt="${r.username} avatar" />
-        <a href="https://websim.com/@${r.username}" target="_blank" rel="noopener">@${r.username}</a>
-      </div>
-      <div class="lb-metric"><span class="lb-total">${fmtNum(r.total_prompts || 0)}</span> total</div>
-    `;
-    leaderboardEl.appendChild(li);
-  });
 }
 
 // Controls
@@ -628,7 +571,7 @@ function setupControls() {
     try {
       await fetchPromptHistoryByCreator(state.creator.username, state.creator.id);
       await upsertLeaderboardForCreator(state.creator.id);
-      statusEl.textContent = 'Synced.';
+      statusEl.textContent = 'Synced to database.';
     } catch (e) {
       console.warn('Manual sync failed', e);
       statusEl.textContent = 'Sync failed.';
@@ -639,7 +582,7 @@ function setupControls() {
   });
 }
 
-// Background loop: periodically refresh creator data and upsert leaderboard
+// Background loop: periodically refresh creator data and upsert to database
 async function backgroundAggregatorLoop() {
   if (state.backgroundLoopRunning || !state.creator?.username || !state.creator?.id) return;
   state.backgroundLoopRunning = true;
@@ -668,7 +611,6 @@ async function backgroundAggregatorLoop() {
 
 async function init() {
   setupControls();
-  startLeaderboardSubscription();
 
   // Identify the creator of the current page if available
   let creator = null;
@@ -699,7 +641,7 @@ async function init() {
   await fetchPromptHistoryByCreator(creator.username, creator.id);
   await upsertLeaderboardForCreator(creator.id);
 
-  // Start background loop to keep leaderboard fresh "infinitely"
+  // Start background loop to keep database aggregates fresh
   backgroundAggregatorLoop();
 
   // Rerender heatmap responsively when viewport crosses mobile threshold
