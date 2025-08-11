@@ -450,7 +450,7 @@ async function upsertLeaderboardForCreator(creatorId) {
   const { total, currentStreak, bestStreak, avg } = computeStats();
   try {
     await room.collection('prompt_leaderboard_v1').upsert({
-      id: creatorId,            // primary key = user_id
+      id: creatorId,            // primary key = user_id (stored as text in schema)
       total_prompts: total,
       current_streak: currentStreak,
       best_streak: bestStreak,
@@ -474,7 +474,7 @@ function startLeaderboardSubscription() {
       pl.avg_per_day,
       u.username
     from public.prompt_leaderboard_v1 pl
-    join public.user u on (u.id = pl.id)
+    join public.user u on (u.id::text = pl.id)
     order by pl.total_prompts desc, pl.best_streak desc, pl.current_streak desc
     limit 20
   `;
