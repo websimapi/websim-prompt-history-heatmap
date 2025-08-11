@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Prompt History Heatmap</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="styles.css" rel="stylesheet" />
+    <script type="importmap">
+      {
+        "imports": {
+          "htm": "https://unpkg.com/htm@3.1.1/dist/htm.module.js"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="title-wrap">
+        <div class="creator">
+          <a id="creator-avatar" class="avatar-link" href="#" target="_blank" rel="noopener">
+            <img id="creator-img" class="avatar" alt="creator avatar" />
+          </a>
+          <div class="creator-meta">
+            <a id="creator-name" class="creator-name" href="#" target="_blank" rel="noopener">@creator</a>
+            <div id="creator-sub" class="creator-sub">Loading creator...</div>
+          </div>
+        </div>
+        <h1 class="app-title">Prompt History</h1>
+      </div>
+
+      <div class="controls">
+        <div class="view-toggle" role="tablist" aria-label="Time range">
+          <button class="toggle-btn active" data-view="year" role="tab" aria-selected="true">Year</button>
+          <button class="toggle-btn" data-view="month" role="tab" aria-selected="false">Month</button>
+          <button class="toggle-btn" data-view="week" role="tab" aria-selected="false">Week</button>
+        </div>
+        <div class="year-select-wrap">
+          <select id="year-select" aria-label="Select year"></select>
+        </div>
+      </div>
+    </header>
+
+    <main class="container">
+      <section class="heatmap-card">
+        <div class="heatmap-header">
+          <div class="heatmap-title">Prompts per day</div>
+          <div class="legend" aria-label="Color intensity legend">
+            <span>Less</span>
+            <div class="legend-steps">
+              <div class="legend-swatch lvl-0" title="0"></div>
+              <div class="legend-swatch lvl-1" title="1"></div>
+              <div class="legend-swatch lvl-2" title="2-3"></div>
+              <div class="legend-swatch lvl-3" title="4-6"></div>
+              <div class="legend-swatch lvl-4" title="7+"></div>
+            </div>
+            <span>More</span>
+          </div>
+        </div>
+
+        <div class="heatmap-wrap">
+          <div class="y-axis">
+            <span>Mon</span>
+            <span>Wed</span>
+            <span>Fri</span>
+          </div>
+          <div id="heatmap" class="heatmap" role="grid" aria-label="GitHub-style prompt heatmap"></div>
+        </div>
+
+        <div id="status" class="status">
+          <span id="load-status">Loading prompt activity…</span>
+          <span id="page-count" class="muted"></span>
+        </div>
+      </section>
+
+      <aside class="stats">
+        <div class="stat">
+          <div class="stat-value" id="stat-total">—</div>
+          <div class="stat-label">Total prompts</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value" id="stat-streak">—</div>
+          <div class="stat-label">Current streak</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value" id="stat-best">—</div>
+          <div class="stat-label">Best streak</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value" id="stat-avg">—</div>
+          <div class="stat-label">Avg per day</div>
+        </div>
+      </aside>
+    </main>
+
+    <footer class="footer">
+      Data aggregates the creator’s posted generations (sites/projects) by created date to estimate “prompts per day.”
+    </footer>
+
+    <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
+
+    <script type="module" src="app.js"></script>
+  <script defer src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon='{"version":"2024.11.0","token":"4c6229722a6346bc8eb5cb0e5eae5d41","server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
+</body>
+</html>
+
